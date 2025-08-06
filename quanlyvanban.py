@@ -28,7 +28,7 @@ with st.form("form_vanban"):
                 tmp.write(file_upload.read())
                 tmp_path = tmp.name
                 # Gọi hàm upload
-                file_url = upload_file_to_drive(tmp_path, file_upload.name, FOLDER_ID)
+                file_url = upload_file_to_drive(tmp_path, file_upload.name)
                 os.remove(tmp_path)
 
         # Ghi vào CSV
