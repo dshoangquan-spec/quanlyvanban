@@ -3,6 +3,7 @@ import pandas as pd
 import tempfile
 import os
 from upload_to_dropbox import upload_file_to_dropbox  # trả về đường dẫn Dropbox
+from upload_to_dropbox import download_bytes_from_dropbox
 
 # Thiết lập giao diện
 st.set_page_config(page_title="Quản lý Văn bản", layout="wide")
@@ -54,10 +55,38 @@ with st.form("form_vanban"):
         else:
             st.warning("Đã lưu thông tin nhưng chưa có file Dropbox.")
 
-# Hiển thị danh sách đã lưu
+# Hiển thị danh sách đã lưu + nút tải
 st.subheader("📄 Danh sách Văn bản đã lưu")
 if os.path.exists("vanban.csv"):
     df = pd.read_csv("vanban.csv")
+
+    # Hiển thị bảng
     st.dataframe(df, use_container_width=True)
+
+    st.markdown("### ⬇️ Tải file đã lưu")
+    for i, row in df.iterrows():
+        dropbox_path = str(row.get("File Dropbox", "")).strip()
+        if not dropbox_path.startswith("/"):
+            continue  # bỏ qua các hàng chưa có đường dẫn Dropbox hợp lệ
+
+        file_name = os.path.basename(dropbox_path)
+        cols = st.columns([0.5, 2, 1])
+        with cols[0]:
+            st.write(f"**{i+1}.**")
+        with cols[1]:
+            st.write(f"{file_name}")
+            st.caption(dropbox_path)
+        with cols[2]:
+            try:
+                file_bytes = download_bytes_from_dropbox(dropbox_path)
+                st.download_button(
+                    label="⬇️ Tải",
+                    data=file_bytes,
+                    file_name=file_name,
+                    mime="application/octet-stream",
+                    key=f"dl_{i}",
+                )
+            except Exception as e:
+                st.error(f"Lỗi tải: {e}")
 else:
     st.info("Chưa có văn bản nào được lưu.")
