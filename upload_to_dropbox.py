@@ -2,19 +2,20 @@
 import os
 import dropbox
 import streamlit as st
-from dropbox.exceptions import ApiError
 from dropbox import files as dbx_files
+from dropbox.exceptions import ApiError
 
-# ---- Cấu hình mặc định cho thư mục lưu trên Dropbox ----
-# LƯU Ý: viết đúng tên thư mục như bạn thấy trong Dropbox (không dùng %20)
+# Thư mục mặc định (đúng tên như trên Dropbox, không dùng %20)
 DEFAULT_FOLDER = "/Quan/Quan ly van ban/Van ban dieu hanh, chi dao"
 
-def _get_dbx():
+
+def _get_dbx() -> dropbox.Dropbox:
     """Khởi tạo client Dropbox từ secrets hoặc biến môi trường."""
     token = os.environ.get("DROPBOX_ACCESS_TOKEN") or st.secrets["DROPBOX_ACCESS_TOKEN"]
     return dropbox.Dropbox(token)
 
-def _ensure_folder(dbx: dropbox.Dropbox, folder_path: str):
+
+def _ensure_folder(dbx: dropbox.Dropbox, folder_path: str) -> None:
     """Tạo thư mục nếu chưa có (an toàn khi gọi lặp lại)."""
     if not folder_path or folder_path == "/":
         return
@@ -22,10 +23,11 @@ def _ensure_folder(dbx: dropbox.Dropbox, folder_path: str):
         dbx.files_get_metadata(folder_path)
     except ApiError as e:
         # Nếu không tồn tại -> tạo
-        if isinstance(e.error, dbx_files.GetMetadataError) or "path/not_found" in str(e.error):
+        if "path/not_found" in str(e.error).lower():
             dbx.files_create_folder_v2(folder_path)
         else:
             raise
+
 
 def upload_file_to_dropbox(file_path: str, file_name: str, dropbox_folder: str | None = None) -> str:
     """
@@ -36,27 +38,23 @@ def upload_file_to_dropbox(file_path: str, file_name: str, dropbox_folder: str |
     """
     dbx = _get_dbx()
 
-    folder = dropbox_folder or DEFAULT_FOLDER
-    # Chuẩn hóa path
+    folder = (dropbox_folder or DEFAULT_FOLDER).strip()
     if not folder.startswith("/"):
         folder = "/" + folder
-    folder = folder.rstrip("/")  # bỏ dấu / cuối nếu có
+    folder = folder.rstrip("/")
 
-    # Tạo thư mục nếu chưa tồn tại
     _ensure_folder(dbx, folder)
 
     dropbox_path = f"{folder}/{file_name}"
 
-    # Upload (ghi đè nếu trùng tên)
     with open(file_path, "rb") as f:
         dbx.files_upload(
             f.read(),
             dropbox_path,
             mode=dbx_files.WriteMode.overwrite,
-            mute=True
+            mute=True,
         )
 
-    # Không tạo link chia sẻ – chỉ trả về đường dẫn
     return dropbox_path
 
 
@@ -66,5 +64,21 @@ def download_bytes_from_dropbox(dropbox_path: str) -> bytes:
     YÊU CẦU QUYỀN: files.content.read
     """
     dbx = _get_dbx()
-    _meta, res = dbx.files_download(dropbox_path)
-    return res.content
+    try:
+        _meta, res = dbx.files_download(dropbox_path)
+        return res.content
+    except ApiError as e:
+        # Cho message dễ hiểu hơn khi path sai / không tồn tại
+        raise RuntimeError(f"Không tải được file từ '{dropbox_path}': {e}")
+
+
+def delete_file_from_dropbox(dropbox_path: str) -> None:
+    """
+    Xóa file trên Dropbox theo đường dẫn.
+    YÊU CẦU QUYỀN: files.content.write
+    """
+    dbx = _get_dbx()
+    try:
+        dbx.files_delete_v2(dropbox_path)
+    except ApiError as e:
+        raise RuntimeError(f"Không xóa được file '{dropbox_path}': {e}")
