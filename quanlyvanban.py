@@ -68,8 +68,4 @@ if os.path.exists("vanban.csv"):
     st.dataframe(df, use_container_width=True)
 else:
     st.info("Chưa có văn bản nào được lưu.")
-    # trong quanlyvanban.py
-from upload_to_dropbox import upload_file_to_dropbox
-
-path = upload_file_to_dropbox(tmp_path, file_upload.name)  # path = "/Quan/Quan ly van ban/Van ban dieu hanh, chi dao/xxx.pdf"
-
+  
