@@ -5,7 +5,7 @@ import unicodedata
 import tempfile
 import pandas as pd
 import streamlit as st
-from datetime import date, datetime
+from datetime import date
 
 from upload_to_dropbox import (
     upload_file_to_dropbox,
@@ -51,21 +51,27 @@ def _norm(s: str) -> str:
     return s.lower().strip()
 
 def _format_ddmmyyyy(dt) -> str:
+    """Nhận Timestamp/str/date -> trả về dd/mm/yyyy hoặc chuỗi gốc."""
     if pd.isna(dt):
         return ""
     try:
-        return pd.to_datetime(dt).strftime("%d/%m/%Y")
+        return pd.to_datetime(dt, errors="coerce").strftime("%d/%m/%Y")
     except Exception:
         return str(dt)
 
 def _export_table_bytes(df: pd.DataFrame):
+    """Xuất Excel (ưu tiên openpyxl -> xlsxwriter -> CSV)."""
     # 1) openpyxl
     try:
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="DanhSach")
         buf.seek(0)
-        return buf.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "vanban_loc.xlsx"
+        return (
+            buf.read(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "vanban_loc.xlsx",
+        )
     except Exception:
         pass
     # 2) xlsxwriter
@@ -78,7 +84,11 @@ def _export_table_bytes(df: pd.DataFrame):
                 width = min(40, max(12, int(df[col].astype(str).map(len).max() * 1.1)))
                 ws.set_column(i, i, width)
         buf.seek(0)
-        return buf.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "vanban_loc.xlsx"
+        return (
+            buf.read(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "vanban_loc.xlsx",
+        )
     except Exception:
         csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
         return csv_bytes, "text/csv", "vanban_loc.csv"
@@ -94,7 +104,8 @@ with st.form("form_vanban", clear_on_submit=False):
         tieu_de     = st.text_input("Tiêu đề")
         co_quan     = st.text_input("Cơ quan ban hành")
         linh_vuc    = st.text_input("Lĩnh vực")
-        ngay_bh     = st.date_input("Ngày ban hành", value=date.today())  # <-- thêm ngày ban hành
+        # Hiển thị theo VN
+        ngay_bh     = st.date_input("Ngày ban hành", value=date.today(), format="DD/MM/YYYY")
 
     with cR:
         st.markdown("**Đính kèm (PDF/DOCX)**")
@@ -118,13 +129,19 @@ with st.form("form_vanban", clear_on_submit=False):
             finally:
                 os.remove(tmp_path)
 
-        # Lưu ngày ở dạng ISO để lọc chuẩn xác
+        # Lưu **cả hai cột**:
+        # - NgayBH (ISO, dùng để lọc & tính toán)
+        # - Ngày ban hành (dd/mm/yyyy) để hiển thị/Excel
+        ngay_bh_iso = ngay_bh.isoformat()
+        ngay_bh_vn  = ngay_bh.strftime("%d/%m/%Y")
+
         row = {
             "Số văn bản": so_van_ban,
             "Tiêu đề": tieu_de,
             "Cơ quan": co_quan,
             "Lĩnh vực": linh_vuc,
-            "Ngày ban hành": (ngay_bh.isoformat() if isinstance(ngay_bh, date) else str(ngay_bh)),
+            "NgayBH": ngay_bh_iso,
+            "Ngày ban hành": ngay_bh_vn,
             "File Dropbox": dropbox_path if dropbox_path else "Không có",
         }
 
@@ -146,14 +163,19 @@ st.subheader("🗂️ Danh sách Văn bản đã lưu")
 if os.path.exists(DATA_FILE):
     df = pd.read_csv(DATA_FILE, keep_default_na=False)
 
-    # Chuẩn hóa cột file + ngày
+    # Chuẩn hóa cột file
     if "File Dropbox" in df.columns:
         df["File Dropbox"] = df["File Dropbox"].apply(_clean_path)
 
-    if "Ngày ban hành" in df.columns:
-        df["Ngày ban hành"] = pd.to_datetime(df["Ngày ban hành"], errors="coerce")  # datetime64[ns]
-    else:
-        df["Ngày ban hành"] = pd.NaT
+    # Chuẩn hóa cột ngày:
+    # - NgayBH là ISO (YYYY-MM-DD); nếu thiếu, sinh từ "Ngày ban hành" (VN)
+    if "NgayBH" not in df.columns:
+        # fallback nếu các bản cũ chưa có cột NgayBH
+        df["NgayBH"] = pd.to_datetime(
+            df.get("Ngày ban hành", ""), errors="coerce", dayfirst=True
+        ).dt.strftime("%Y-%m-%d").fillna("")
+    # Series datetime để lọc
+    NgayBH_dt = pd.to_datetime(df["NgayBH"], errors="coerce")
 
     with st.expander("🔎 Tìm kiếm & bộ lọc", expanded=True):
         q = st.text_input("Từ khóa", placeholder="Nhập số văn bản, tiêu đề, cơ quan, lĩnh vực, tên file...")
@@ -163,8 +185,8 @@ if os.path.exists(DATA_FILE):
         sel_linhvuc = c2.multiselect("Lĩnh vực", sorted([x for x in df.get("Lĩnh vực", "").unique() if str(x).strip()]))
         sel_ext     = c3.multiselect("Định dạng file", ["pdf", "docx"])
 
-        # Lấy min/max ngày có thực
-        dt_series = df["Ngày ban hành"].dropna()
+        # min/max ngày có thực (dựa trên NgayBH_dt)
+        dt_series = NgayBH_dt.dropna()
         if len(dt_series) == 0:
             dt_min = date.today()
             dt_max = date.today()
@@ -172,23 +194,30 @@ if os.path.exists(DATA_FILE):
             dt_min = dt_series.min().date()
             dt_max = dt_series.max().date()
 
-        # Bộ lọc khoảng ngày (ngày ban hành)
-        date_from, date_to = c4.date_input("Từ / Đến (ngày BH)", value=(dt_min, dt_max))
+        # Bộ lọc khoảng ngày ban hành (hiển thị VN)
+        date_from, date_to = c4.date_input(
+            "Từ / Đến (ngày BH)",
+            value=(dt_min, dt_max),
+            format="DD/MM/YYYY"
+        )
         page_size   = c5.selectbox("Mỗi trang", [10, 20, 50, 100], index=0)
         export_btn  = c6.button("⬇️ Xuất Excel/CSV (kết quả lọc)")
 
-    # Cột chuẩn hóa tìm kiếm (có thêm ngày)
+    # Cột chuẩn hóa tìm kiếm (gộp các trường; dùng NgayBH ISO cho ổn)
     cols_join = [
         df.get("Số văn bản", "").astype(str),
         df.get("Tiêu đề", "").astype(str),
         df.get("Cơ quan", "").astype(str),
         df.get("Lĩnh vực", "").astype(str),
         df.get("File Dropbox", "").astype(str),
-        df["Ngày ban hành"].dt.strftime("%Y-%m-%d").fillna(""),
+        NgayBH_dt.dt.strftime("%Y-%m-%d").fillna(""),  # chuẩn tìm kiếm
     ]
-    df["_norm_row"] = (cols_join[0] + " " + cols_join[1] + " " + cols_join[2] + " " +
-                       cols_join[3] + " " + cols_join[4] + " " + cols_join[5]).map(_norm)
+    df["_norm_row"] = (
+        cols_join[0] + " " + cols_join[1] + " " + cols_join[2] + " " +
+        cols_join[3] + " " + cols_join[4] + " " + cols_join[5]
+    ).map(_norm)
 
+    # Lọc theo từ khóa/các field
     filtered = df.copy()
     if q:
         nq = _norm(q)
@@ -200,21 +229,25 @@ if os.path.exists(DATA_FILE):
     if sel_ext:
         filtered = filtered[filtered["File Dropbox"].str.lower().str.endswith(tuple(sel_ext))]
 
-    # Lọc theo khoảng ngày ban hành
+    # Lọc theo khoảng ngày ban hành (dựa vào NgayBH_dt)
     if isinstance(date_from, date) and isinstance(date_to, date):
-        mask_date = filtered["Ngày ban hành"].between(pd.to_datetime(date_from), pd.to_datetime(date_to), inclusive="both")
+        series_date = pd.to_datetime(filtered["NgayBH"], errors="coerce").dt.date
+        mask_date = (series_date >= date_from) & (series_date <= date_to)
         filtered = filtered[mask_date]
 
     if "_norm_row" in filtered.columns:
         filtered = filtered.drop(columns=["_norm_row"])
 
-    # Xuất Excel/CSV
+    # Xuất Excel/CSV (đảm bảo cột hiển thị là dd/mm/yyyy)
     if export_btn:
-        # Chuyển “Ngày ban hành” sang chuỗi DD/MM/YYYY trước khi export cho dễ đọc
         tmp = filtered.copy()
+        # Chuẩn 'Ngày ban hành' cho đẹp
         if "Ngày ban hành" in tmp.columns:
             tmp["Ngày ban hành"] = tmp["Ngày ban hành"].apply(_format_ddmmyyyy)
-        data_bytes, mime, fname = _export_table_bytes(tmp)
+        else:
+            # nếu chưa có thì sinh từ NgayBH
+            tmp["Ngày ban hành"] = pd.to_datetime(tmp["NgayBH"], errors="coerce").dt.strftime("%d/%m/%Y")
+        data_bytes, mime, fname = _export_table_bytes(tmp.drop(columns=["NgayBH"], errors="ignore"))
         st.download_button("⬇️ Tải dữ liệu đã lọc", data=data_bytes, file_name=fname, mime=mime)
 
     # =========================
@@ -233,12 +266,14 @@ if os.path.exists(DATA_FILE):
         end   = start + page_size
         show  = filtered.iloc[start:end].reset_index(drop=True)
 
-        # Định dạng ngày cho cột hiển thị
+        # Hiển thị ngày kiểu VN
         show_disp = show.copy()
-        if "Ngày ban hành" in show_disp.columns:
+        if "Ngày ban hành" in show_disp.columns and show_disp["Ngày ban hành"].notna().any():
             show_disp["Ngày ban hành"] = show_disp["Ngày ban hành"].apply(_format_ddmmyyyy)
+        else:
+            show_disp["Ngày ban hành"] = pd.to_datetime(show_disp["NgayBH"], errors="coerce").dt.strftime("%d/%m/%Y")
 
-        # Header (thêm cột Ngày ban hành)
+        # Header
         H = st.columns([0.35, 0.9, 1.8, 1.1, 1.1, 1.1, 1.6, 0.7, 0.7])
         H[0].markdown("**#**")
         H[1].markdown("**Số văn bản**")
@@ -261,7 +296,7 @@ if os.path.exists(DATA_FILE):
             c[2].write(row.get("Tiêu đề", ""))
             c[3].write(row.get("Cơ quan", ""))
             c[4].write(row.get("Lĩnh vực", ""))
-            c[5].write(row.get("Ngày ban hành", ""))  # đã format DD/MM/YYYY
+            c[5].write(row.get("Ngày ban hành", ""))  # dd/mm/yyyy
             c[6].write(os.path.basename(dropbox_path) or "-")
 
             if dropbox_path and dropbox_path.startswith("/"):
