@@ -1,11 +1,10 @@
+# quanlyvanban.py
 import os
 import io
-import base64
 import unicodedata
 import tempfile
 import pandas as pd
 import streamlit as st
-
 
 from upload_to_dropbox import (
     upload_file_to_dropbox,
@@ -13,8 +12,12 @@ from upload_to_dropbox import (
     delete_file_from_dropbox,
 )
 
-# ============ CSS tinh chỉnh UI ============
-st.markdown("""
+# =========================
+# Cấu hình trang + CSS
+# =========================
+st.set_page_config(page_title="Quản lý Văn bản", layout="wide")
+st.markdown(
+    """
 <style>
 .block-container {padding-top: 1rem; padding-bottom: 2rem;}
 .stTextInput>div>div>input, .stMultiSelect div[data-baseweb="select"] { min-height: 42px; }
@@ -24,10 +27,19 @@ st.markdown("""
 .badge { background:#eef3ff; color:#2c3e50; padding:2px 8px; border-radius:999px; font-size:.8rem; }
 hr { margin: 0.6rem 0; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-# ============ Helpers ============
+st.title("📚 Quản lý Văn bản - Dropbox")
+
+DATA_FILE = "vanban.csv"
+
+# =========================
+# Helpers
+# =========================
 def _clean_path(val: str) -> str:
+    """Loại bỏ nội dung thừa nếu trước đây có ghi '✅ Đã upload...' vào cột."""
     if not isinstance(val, str):
         return ""
     return val.replace("✅ Đã upload thành công tới:", "").strip()
@@ -39,22 +51,27 @@ def _norm(s: str) -> str:
     s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
     return s.lower().strip()
 
-def _excel_bytes_from_df(df: pd.DataFrame) -> bytes:
-    """Xuất DataFrame ra XLSX (ưu tiên openpyxl; fallback xlsxwriter)."""
-    buf = io.BytesIO()
-
-    # Thử openpyxl trước (phổ biến hơn)
+def _export_table_bytes(df: pd.DataFrame):
+    """
+    Cố gắng xuất XLSX (openpyxl; fallback xlsxwriter).
+    Nếu đều không có -> tự động xuất CSV.
+    Return: (bytes, mime, filename)
+    """
+    # 1) openpyxl
     try:
+        import io
+        buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="DanhSach")
-            # (openpyxl không có autofit, có thể bỏ qua)
         buf.seek(0)
-        return buf.read()
-    except Exception as e_openpyxl:
+        return buf.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "vanban_loc.xlsx"
+    except Exception:
         pass
 
-    # Fallback sang xlsxwriter nếu openpyxl không có
+    # 2) xlsxwriter
     try:
+        import io
+        buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
             df.to_excel(writer, index=False, sheet_name="DanhSach")
             ws = writer.sheets["DanhSach"]
@@ -62,40 +79,15 @@ def _excel_bytes_from_df(df: pd.DataFrame) -> bytes:
                 width = min(40, max(12, int(df[col].astype(str).map(len).max() * 1.1)))
                 ws.set_column(i, i, width)
         buf.seek(0)
-        return buf.read()
-    except Exception as e_xlsx:
-        # Cả 2 đều không có -> gợi ý cài
-        raise RuntimeError(
-            "Chưa cài thư viện tạo Excel. Hãy thêm `openpyxl` (khuyên dùng) "
-            "hoặc `xlsxwriter` vào requirements.txt / pip install."
-        ) from e_xlsx
-
-
-def _pdf_preview_safe(data: bytes, height: int = 700):
-    try:
-        # Cách 1: nhúng trực tiếp
-        b64 = base64.b64encode(data).decode("utf-8")
-        src = f"data:application/pdf;base64,{b64}"
-        st.components.v1.html(
-            f'<iframe src="{src}" width="100%" height="{height}" type="application/pdf"></iframe>',
-            height=height + 8,
-            scrolling=True,
-        )
+        return buf.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "vanban_loc.xlsx"
     except Exception:
-        pass  # nếu lỗi sẽ thử cách 2
+        # 3) Fallback CSV (không cần lib)
+        csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
+        return csv_bytes, "text/csv", "vanban_loc.csv"
 
-    # Cách 2: pdf.js + link tải
-    b64 = base64.b64encode(data).decode("utf-8")
-    data_url = f"data:application/pdf;base64,{b64}"
-    viewer = "https://mozilla.github.io/pdf.js/web/viewer.html?file=" + quote(data_url, safe="")
-    st.components.v1.iframe(viewer, height=height, scrolling=True)
-    st.markdown(f"[📄 Mở PDF trong tab mới]({viewer})", unsafe_allow_html=True)
-    st.download_button("⬇ Tải PDF", data=data, file_name="preview.pdf", mime="application/pdf")
-# ============ Title ============
-st.set_page_config(page_title="Quản lý Văn bản", layout="wide")
-st.title("📚 Quản lý Văn bản - Dropbox")
-
-# ============ Form nhập ============
+# =========================
+# Form nhập liệu + upload
+# =========================
 with st.form("form_vanban", clear_on_submit=False):
     cL, cR = st.columns([2, 1])
 
@@ -120,6 +112,7 @@ with st.form("form_vanban", clear_on_submit=False):
                 tmp.write(file_upload.read())
                 tmp_path = tmp.name
             try:
+                # Upload vào folder mặc định (đặt trong upload_to_dropbox.py)
                 dropbox_path = upload_file_to_dropbox(tmp_path, file_upload.name)
                 st.toast("✅ Upload thành công!", icon="✅")
             except Exception as e:
@@ -135,10 +128,10 @@ with st.form("form_vanban", clear_on_submit=False):
             "File Dropbox": dropbox_path if dropbox_path else "Không có",
         }
 
-        if not os.path.exists("vanban.csv"):
-            pd.DataFrame([row]).to_csv("vanban.csv", index=False, encoding="utf-8-sig")
+        if not os.path.exists(DATA_FILE):
+            pd.DataFrame([row]).to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
         else:
-            pd.DataFrame([row]).to_csv("vanban.csv", mode="a", header=False, index=False, encoding="utf-8-sig")
+            pd.DataFrame([row]).to_csv(DATA_FILE, mode="a", header=False, index=False, encoding="utf-8-sig")
 
         if dropbox_path:
             st.success("Văn bản đã được lưu.")
@@ -147,21 +140,23 @@ with st.form("form_vanban", clear_on_submit=False):
 
 st.subheader("🗂️ Danh sách Văn bản đã lưu")
 
-# ============ Đọc dữ liệu & Tìm kiếm/Lọc ============
-if os.path.exists("vanban.csv"):
-    df = pd.read_csv("vanban.csv", keep_default_na=False)
+# =========================
+# Đọc dữ liệu & tìm kiếm / lọc
+# =========================
+if os.path.exists(DATA_FILE):
+    df = pd.read_csv(DATA_FILE, keep_default_na=False)
     if "File Dropbox" in df.columns:
         df["File Dropbox"] = df["File Dropbox"].apply(_clean_path)
 
     with st.expander("🔎 Tìm kiếm & bộ lọc", expanded=True):
         q = st.text_input("Từ khóa", placeholder="Nhập số văn bản, tiêu đề, cơ quan, lĩnh vực, tên file...")
 
-        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 0.8, 1])
+        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 0.9, 1])
         sel_coquan  = c1.multiselect("Cơ quan", sorted([x for x in df.get("Cơ quan", "").unique() if str(x).strip()]))
         sel_linhvuc = c2.multiselect("Lĩnh vực", sorted([x for x in df.get("Lĩnh vực", "").unique() if str(x).strip()]))
         sel_ext     = c3.multiselect("Định dạng file", ["pdf", "docx"])
         page_size   = c4.selectbox("Mỗi trang", [10, 20, 50, 100], index=0)
-        export_btn  = c5.button("⬇️ Xuất Excel (kết quả lọc)")
+        export_btn  = c5.button("⬇️ Xuất Excel/CSV (kết quả lọc)")
 
     # Cột chuẩn hóa tìm kiếm
     cols_join = [
@@ -186,12 +181,14 @@ if os.path.exists("vanban.csv"):
     if "_norm_row" in filtered.columns:
         filtered = filtered.drop(columns=["_norm_row"])
 
-    # Xuất Excel
+    # Xuất Excel/CSV
     if export_btn:
-        xlsx_data = _excel_bytes_from_df(filtered)
-        st.download_button("⬇️ Tải Excel", data=xlsx_data, file_name="vanban_loc.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        data_bytes, mime, fname = _export_table_bytes(filtered)
+        st.download_button("⬇️ Tải dữ liệu đã lọc", data=data_bytes, file_name=fname, mime=mime)
 
-    # ============ Phân trang ============
+    # =========================
+    # Phân trang + hiển thị
+    # =========================
     total = len(filtered)
     if total == 0:
         st.info("Không có dữ liệu phù hợp.")
@@ -205,8 +202,8 @@ if os.path.exists("vanban.csv"):
         end   = start + page_size
         show  = filtered.iloc[start:end].reset_index(drop=True)
 
-        # ============ Render bảng + hành động ============
-       H = st.columns([0.35, 1.0, 1.8, 1.1, 1.1, 1.6, 0.7, 0.7])
+        # Header cột (8 cột, không còn 'Xem')
+        H = st.columns([0.35, 1.0, 1.8, 1.1, 1.1, 1.6, 0.7, 0.7])
         H[0].markdown("**#**")
         H[1].markdown("**Số văn bản**")
         H[2].markdown("**Tiêu đề**")
@@ -216,53 +213,54 @@ if os.path.exists("vanban.csv"):
         H[6].markdown("**⬇️ Tải**")
         H[7].markdown("**🗑 Xóa**")
 
-        if "preview_path" not in st.session_state:
-            st.session_state.preview_path = ""
-
+        # Render từng hàng
         for idx, row in show.iterrows():
             dropbox_path = _clean_path(row.get("File Dropbox", ""))
             file_name = os.path.basename(dropbox_path) if dropbox_path.startswith("/") else ""
 
-           c = st.columns([0.35, 1.0, 1.8, 1.1, 1.1, 1.6, 0.7, 0.7])
-c[0].write(f"**{start+idx+1}**")
-c[1].write(row.get("Số văn bản", ""))
-c[2].write(row.get("Tiêu đề", ""))
-c[3].write(row.get("Cơ quan", ""))
-c[4].write(row.get("Lĩnh vực", ""))
-c[5].write(file_name or "-")
+            c = st.columns([0.35, 1.0, 1.8, 1.1, 1.1, 1.6, 0.7, 0.7])
+            c[0].write(f"**{start + idx + 1}**")
+            c[1].write(row.get("Số văn bản", ""))
+            c[2].write(row.get("Tiêu đề", ""))
+            c[3].write(row.get("Cơ quan", ""))
+            c[4].write(row.get("Lĩnh vực", ""))
+            c[5].write(file_name or "-")
 
-if dropbox_path and dropbox_path.startswith("/"):
-    # ⬇️ Tải
-    with c[6].container():
-        st.markdown('<div class="btn-cell">', unsafe_allow_html=True)
-        try:
-            file_bytes = download_bytes_from_dropbox(dropbox_path)
-            st.download_button(
-                "⬇️", data=file_bytes, file_name=file_name or "file",
-                mime="application/octet-stream", key=f"dl_{dropbox_path}"
-            )
-        except Exception:
-            st.button("⚠️", key=f"warn_{dropbox_path}", disabled=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+            if dropbox_path and dropbox_path.startswith("/"):
+                # ⬇️ Tải
+                with c[6].container():
+                    st.markdown('<div class="btn-cell">', unsafe_allow_html=True)
+                    try:
+                        file_bytes = download_bytes_from_dropbox(dropbox_path)
+                        st.download_button(
+                            "⬇️",
+                            data=file_bytes,
+                            file_name=file_name or "file",
+                            mime="application/octet-stream",
+                            key=f"dl_{start}_{idx}",
+                        )
+                    except Exception:
+                        st.button("⚠️", key=f"warn_{start}_{idx}", disabled=True)
+                    st.markdown("</div>", unsafe_allow_html=True)
 
-    # 🗑 Xóa
-    with c[7].container():
-        st.markdown('<div class="btn-cell">', unsafe_allow_html=True)
-        if st.button("🗑", key=f"del_{dropbox_path}"):
-            try:
-                delete_file_from_dropbox(dropbox_path)
-            except Exception as e:
-                st.error(f"Lỗi xóa Dropbox: {e}")
+                # 🗑 Xóa
+                with c[7].container():
+                    st.markdown('<div class="btn-cell">', unsafe_allow_html=True)
+                    if st.button("🗑", key=f"del_{start}_{idx}"):
+                        try:
+                            delete_file_from_dropbox(dropbox_path)
+                        except Exception as e:
+                            st.error(f"Lỗi xóa Dropbox: {e}")
 
-            full_df = pd.read_csv("vanban.csv", keep_default_na=False)
-            full_df["File Dropbox"] = full_df["File Dropbox"].apply(_clean_path)
-            full_df = full_df[full_df["File Dropbox"] != dropbox_path]
-            full_df.to_csv("vanban.csv", index=False, encoding="utf-8-sig")
-            st.success(f"Đã xóa: {file_name}")
-            st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-    else:
-    c[6].write("-"); c[7].write("-")
-
-    else:
+                        full_df = pd.read_csv(DATA_FILE, keep_default_na=False)
+                        full_df["File Dropbox"] = full_df["File Dropbox"].apply(_clean_path)
+                        full_df = full_df[full_df["File Dropbox"] != dropbox_path]
+                        full_df.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
+                        st.success(f"Đã xóa: {file_name}")
+                        st.rerun()
+                    st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                c[6].write("-")
+                c[7].write("-")
+else:
     st.info("Chưa có văn bản nào được lưu.")
