@@ -39,27 +39,53 @@ def _norm(s: str) -> str:
     return s.lower().strip()
 
 def _excel_bytes_from_df(df: pd.DataFrame) -> bytes:
-    """Xuất DataFrame ra XLSX (trả về bytes)."""
+    """Xuất DataFrame ra XLSX (ưu tiên openpyxl; fallback xlsxwriter)."""
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="DanhSach")
-        # Autofit nhẹ
-        ws = writer.sheets["DanhSach"]
-        for i, col in enumerate(df.columns):
-            width = min(40, max(12, int(df[col].astype(str).map(len).max() * 1.1)))
-            ws.set_column(i, i, width)
-    buf.seek(0)
-    return buf.read()
 
-def _pdf_preview(data: bytes, height: int = 600):
-    """Hiển thị PDF từ bytes (embed base64)."""
-    b64 = base64.b64encode(data).decode("utf-8")
-    src = f"data:application/pdf;base64,{b64}"
-    st.components.v1.html(
-        f'<iframe src="{src}" width="100%" height="{height}" type="application/pdf"></iframe>',
-        height=height + 8,
-        scrolling=True,
-    )
+    # Thử openpyxl trước (phổ biến hơn)
+    try:
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="DanhSach")
+            # (openpyxl không có autofit, có thể bỏ qua)
+        buf.seek(0)
+        return buf.read()
+    except Exception as e_openpyxl:
+        pass
+
+    # Fallback sang xlsxwriter nếu openpyxl không có
+    try:
+        with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+            df.to_excel(writer, index=False, sheet_name="DanhSach")
+            ws = writer.sheets["DanhSach"]
+            for i, col in enumerate(df.columns):
+                width = min(40, max(12, int(df[col].astype(str).map(len).max() * 1.1)))
+                ws.set_column(i, i, width)
+        buf.seek(0)
+        return buf.read()
+    except Exception as e_xlsx:
+        # Cả 2 đều không có -> gợi ý cài
+        raise RuntimeError(
+            "Chưa cài thư viện tạo Excel. Hãy thêm `openpyxl` (khuyên dùng) "
+            "hoặc `xlsxwriter` vào requirements.txt / pip install."
+        ) from e_xlsx
+
+
+def _pdf_preview_safe(data: bytes, height: int = 700):
+    """
+    Xem PDF an toàn: dùng pdf.js host bởi Mozilla.
+    Nếu vẫn bị chặn -> hiển thị link mở tab mới.
+    """
+    try:
+        # Thử cách nhúng trực tiếp trước (nhanh, không phụ thuộc ngoài)
+        _pdf_preview_embed(data, height=height)
+    except Exception:
+        # Fallback: dùng pdf.js viewer
+        b64 = base64.b64encode(data).decode("utf-8")
+        data_url = f"data:application/pdf;base64,{b64}"
+        viewer = "https://mozilla.github.io/pdf.js/web/viewer.html?file=" + quote(data_url, safe="")
+        st.components.v1.iframe(viewer, height=height, scrolling=True)
+        st.caption("Nếu trình duyệt/extension vẫn chặn, bấm vào liên kết dưới để mở trong tab mới.")
+        st.markdown(f"[🔗 Mở PDF trong tab mới]({viewer})")
 
 # ============ Title ============
 st.set_page_config(page_title="Quản lý Văn bản", layout="wide")
@@ -249,7 +275,7 @@ if os.path.exists("vanban.csv"):
             st.subheader("👁 Xem trước")
             try:
                 pdf_bytes = download_bytes_from_dropbox(st.session_state.preview_path)
-                _pdf_preview(pdf_bytes, height=700)
+                _pdf_preview_safe(pdf_bytes, height=700)
             except Exception as e:
                 st.error(f"Không xem trước được PDF: {e}")
             if st.button("Đóng xem trước"):
