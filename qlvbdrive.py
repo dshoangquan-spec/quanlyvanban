@@ -17,8 +17,11 @@ SCOPES = ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/a
 # ==========================
 # Init Google API
 # ==========================
-creds_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-creds = service_account.Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+creds_info = dict(st.secrets["google_credentials"])  # không cần json.loads
+creds = Credentials.from_service_account_info(creds_info, scopes=[
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/spreadsheets"
+])
 
 drive_service = build("drive", "v3", credentials=creds)
 sheets_service = build("sheets", "v4", credentials=creds)
