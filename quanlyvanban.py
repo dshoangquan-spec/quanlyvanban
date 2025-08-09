@@ -5,6 +5,7 @@ import unicodedata
 import tempfile
 import pandas as pd
 import streamlit as st
+from datetime import date, datetime
 
 from upload_to_dropbox import (
     upload_file_to_dropbox,
@@ -39,27 +40,27 @@ DATA_FILE = "vanban.csv"
 # Helpers
 # =========================
 def _clean_path(val: str) -> str:
-    """Loại bỏ nội dung thừa nếu trước đây có ghi '✅ Đã upload...' vào cột."""
     if not isinstance(val, str):
         return ""
     return val.replace("✅ Đã upload thành công tới:", "").strip()
 
 def _norm(s: str) -> str:
-    """Chuẩn hóa để tìm kiếm: bỏ dấu, lower, strip."""
     s = "" if s is None else str(s)
     s = unicodedata.normalize("NFD", s)
     s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
     return s.lower().strip()
 
+def _format_ddmmyyyy(dt) -> str:
+    if pd.isna(dt):
+        return ""
+    try:
+        return pd.to_datetime(dt).strftime("%d/%m/%Y")
+    except Exception:
+        return str(dt)
+
 def _export_table_bytes(df: pd.DataFrame):
-    """
-    Cố gắng xuất XLSX (openpyxl; fallback xlsxwriter).
-    Nếu đều không có -> tự động xuất CSV.
-    Return: (bytes, mime, filename)
-    """
     # 1) openpyxl
     try:
-        import io
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="DanhSach")
@@ -67,10 +68,8 @@ def _export_table_bytes(df: pd.DataFrame):
         return buf.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "vanban_loc.xlsx"
     except Exception:
         pass
-
     # 2) xlsxwriter
     try:
-        import io
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
             df.to_excel(writer, index=False, sheet_name="DanhSach")
@@ -81,7 +80,6 @@ def _export_table_bytes(df: pd.DataFrame):
         buf.seek(0)
         return buf.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "vanban_loc.xlsx"
     except Exception:
-        # 3) Fallback CSV (không cần lib)
         csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
         return csv_bytes, "text/csv", "vanban_loc.csv"
 
@@ -92,10 +90,11 @@ with st.form("form_vanban", clear_on_submit=False):
     cL, cR = st.columns([2, 1])
 
     with cL:
-        so_van_ban = st.text_input("Số văn bản")
+        so_van_ban  = st.text_input("Số văn bản")
         tieu_de     = st.text_input("Tiêu đề")
         co_quan     = st.text_input("Cơ quan ban hành")
         linh_vuc    = st.text_input("Lĩnh vực")
+        ngay_bh     = st.date_input("Ngày ban hành", value=date.today())  # <-- thêm ngày ban hành
 
     with cR:
         st.markdown("**Đính kèm (PDF/DOCX)**")
@@ -112,7 +111,6 @@ with st.form("form_vanban", clear_on_submit=False):
                 tmp.write(file_upload.read())
                 tmp_path = tmp.name
             try:
-                # Upload vào folder mặc định (đặt trong upload_to_dropbox.py)
                 dropbox_path = upload_file_to_dropbox(tmp_path, file_upload.name)
                 st.toast("✅ Upload thành công!", icon="✅")
             except Exception as e:
@@ -120,11 +118,13 @@ with st.form("form_vanban", clear_on_submit=False):
             finally:
                 os.remove(tmp_path)
 
+        # Lưu ngày ở dạng ISO để lọc chuẩn xác
         row = {
             "Số văn bản": so_van_ban,
             "Tiêu đề": tieu_de,
             "Cơ quan": co_quan,
             "Lĩnh vực": linh_vuc,
+            "Ngày ban hành": (ngay_bh.isoformat() if isinstance(ngay_bh, date) else str(ngay_bh)),
             "File Dropbox": dropbox_path if dropbox_path else "Không có",
         }
 
@@ -145,28 +145,49 @@ st.subheader("🗂️ Danh sách Văn bản đã lưu")
 # =========================
 if os.path.exists(DATA_FILE):
     df = pd.read_csv(DATA_FILE, keep_default_na=False)
+
+    # Chuẩn hóa cột file + ngày
     if "File Dropbox" in df.columns:
         df["File Dropbox"] = df["File Dropbox"].apply(_clean_path)
+
+    if "Ngày ban hành" in df.columns:
+        df["Ngày ban hành"] = pd.to_datetime(df["Ngày ban hành"], errors="coerce")  # datetime64[ns]
+    else:
+        df["Ngày ban hành"] = pd.NaT
 
     with st.expander("🔎 Tìm kiếm & bộ lọc", expanded=True):
         q = st.text_input("Từ khóa", placeholder="Nhập số văn bản, tiêu đề, cơ quan, lĩnh vực, tên file...")
 
-        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 0.9, 1])
+        c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1.2, 0.9, 1.1])
         sel_coquan  = c1.multiselect("Cơ quan", sorted([x for x in df.get("Cơ quan", "").unique() if str(x).strip()]))
         sel_linhvuc = c2.multiselect("Lĩnh vực", sorted([x for x in df.get("Lĩnh vực", "").unique() if str(x).strip()]))
         sel_ext     = c3.multiselect("Định dạng file", ["pdf", "docx"])
-        page_size   = c4.selectbox("Mỗi trang", [10, 20, 50, 100], index=0)
-        export_btn  = c5.button("⬇️ Xuất Excel/CSV (kết quả lọc)")
 
-    # Cột chuẩn hóa tìm kiếm
+        # Lấy min/max ngày có thực
+        dt_series = df["Ngày ban hành"].dropna()
+        if len(dt_series) == 0:
+            dt_min = date.today()
+            dt_max = date.today()
+        else:
+            dt_min = dt_series.min().date()
+            dt_max = dt_series.max().date()
+
+        # Bộ lọc khoảng ngày (ngày ban hành)
+        date_from, date_to = c4.date_input("Từ / Đến (ngày BH)", value=(dt_min, dt_max))
+        page_size   = c5.selectbox("Mỗi trang", [10, 20, 50, 100], index=0)
+        export_btn  = c6.button("⬇️ Xuất Excel/CSV (kết quả lọc)")
+
+    # Cột chuẩn hóa tìm kiếm (có thêm ngày)
     cols_join = [
         df.get("Số văn bản", "").astype(str),
         df.get("Tiêu đề", "").astype(str),
         df.get("Cơ quan", "").astype(str),
         df.get("Lĩnh vực", "").astype(str),
         df.get("File Dropbox", "").astype(str),
+        df["Ngày ban hành"].dt.strftime("%Y-%m-%d").fillna(""),
     ]
-    df["_norm_row"] = (cols_join[0] + " " + cols_join[1] + " " + cols_join[2] + " " + cols_join[3] + " " + cols_join[4]).map(_norm)
+    df["_norm_row"] = (cols_join[0] + " " + cols_join[1] + " " + cols_join[2] + " " +
+                       cols_join[3] + " " + cols_join[4] + " " + cols_join[5]).map(_norm)
 
     filtered = df.copy()
     if q:
@@ -178,12 +199,22 @@ if os.path.exists(DATA_FILE):
         filtered = filtered[filtered.get("Lĩnh vực", "").isin(sel_linhvuc)]
     if sel_ext:
         filtered = filtered[filtered["File Dropbox"].str.lower().str.endswith(tuple(sel_ext))]
+
+    # Lọc theo khoảng ngày ban hành
+    if isinstance(date_from, date) and isinstance(date_to, date):
+        mask_date = filtered["Ngày ban hành"].between(pd.to_datetime(date_from), pd.to_datetime(date_to), inclusive="both")
+        filtered = filtered[mask_date]
+
     if "_norm_row" in filtered.columns:
         filtered = filtered.drop(columns=["_norm_row"])
 
     # Xuất Excel/CSV
     if export_btn:
-        data_bytes, mime, fname = _export_table_bytes(filtered)
+        # Chuyển “Ngày ban hành” sang chuỗi DD/MM/YYYY trước khi export cho dễ đọc
+        tmp = filtered.copy()
+        if "Ngày ban hành" in tmp.columns:
+            tmp["Ngày ban hành"] = tmp["Ngày ban hành"].apply(_format_ddmmyyyy)
+        data_bytes, mime, fname = _export_table_bytes(tmp)
         st.download_button("⬇️ Tải dữ liệu đã lọc", data=data_bytes, file_name=fname, mime=mime)
 
     # =========================
@@ -202,33 +233,40 @@ if os.path.exists(DATA_FILE):
         end   = start + page_size
         show  = filtered.iloc[start:end].reset_index(drop=True)
 
-        # Header cột (8 cột, không còn 'Xem')
-        H = st.columns([0.35, 1.0, 1.8, 1.1, 1.1, 1.6, 0.7, 0.7])
+        # Định dạng ngày cho cột hiển thị
+        show_disp = show.copy()
+        if "Ngày ban hành" in show_disp.columns:
+            show_disp["Ngày ban hành"] = show_disp["Ngày ban hành"].apply(_format_ddmmyyyy)
+
+        # Header (thêm cột Ngày ban hành)
+        H = st.columns([0.35, 0.9, 1.8, 1.1, 1.1, 1.1, 1.6, 0.7, 0.7])
         H[0].markdown("**#**")
         H[1].markdown("**Số văn bản**")
         H[2].markdown("**Tiêu đề**")
         H[3].markdown("**Cơ quan**")
         H[4].markdown("**Lĩnh vực**")
-        H[5].markdown("**File**")
-        H[6].markdown("**⬇️ Tải**")
-        H[7].markdown("**🗑 Xóa**")
+        H[5].markdown("**Ngày BH**")
+        H[6].markdown("**File**")
+        H[7].markdown("**⬇️ Tải**")
+        H[8].markdown("**🗑 Xóa**")
 
         # Render từng hàng
-        for idx, row in show.iterrows():
+        for idx, row in show_disp.iterrows():
             dropbox_path = _clean_path(row.get("File Dropbox", ""))
             file_name = os.path.basename(dropbox_path) if dropbox_path.startswith("/") else ""
 
-            c = st.columns([0.35, 1.0, 1.8, 1.1, 1.1, 1.6, 0.7, 0.7])
+            c = st.columns([0.35, 0.9, 1.8, 1.1, 1.1, 1.1, 1.6, 0.7, 0.7])
             c[0].write(f"**{start + idx + 1}**")
             c[1].write(row.get("Số văn bản", ""))
             c[2].write(row.get("Tiêu đề", ""))
             c[3].write(row.get("Cơ quan", ""))
             c[4].write(row.get("Lĩnh vực", ""))
-            c[5].write(file_name or "-")
+            c[5].write(row.get("Ngày ban hành", ""))  # đã format DD/MM/YYYY
+            c[6].write(os.path.basename(dropbox_path) or "-")
 
             if dropbox_path and dropbox_path.startswith("/"):
                 # ⬇️ Tải
-                with c[6].container():
+                with c[7].container():
                     st.markdown('<div class="btn-cell">', unsafe_allow_html=True)
                     try:
                         file_bytes = download_bytes_from_dropbox(dropbox_path)
@@ -244,7 +282,7 @@ if os.path.exists(DATA_FILE):
                     st.markdown("</div>", unsafe_allow_html=True)
 
                 # 🗑 Xóa
-                with c[7].container():
+                with c[8].container():
                     st.markdown('<div class="btn-cell">', unsafe_allow_html=True)
                     if st.button("🗑", key=f"del_{start}_{idx}"):
                         try:
@@ -260,7 +298,7 @@ if os.path.exists(DATA_FILE):
                         st.rerun()
                     st.markdown("</div>", unsafe_allow_html=True)
             else:
-                c[6].write("-")
                 c[7].write("-")
+                c[8].write("-")
 else:
     st.info("Chưa có văn bản nào được lưu.")
