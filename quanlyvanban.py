@@ -73,32 +73,26 @@ def _excel_bytes_from_df(df: pd.DataFrame) -> bytes:
         ) from e_xlsx
 
 
-def _pdf_preview_embed(data: bytes, height: int = 700):
-    """Cách 1: nhúng trực tiếp data: vào iframe (có thể bị chặn ở 1 số Chrome/extension)."""
-    b64 = base64.b64encode(data).decode("utf-8")
-    src = f"data:application/pdf;base64,{b64}"
-    st.components.v1.html(
-        f'<iframe src="{src}" width="100%" height="{height}" type="application/pdf"></iframe>',
-        height=height + 8,
-        scrolling=True,
-    )
-
 def _pdf_preview_safe(data: bytes, height: int = 700):
-    """
-    Xem PDF an toàn: thử nhúng trực tiếp; nếu bị chặn, dùng pdf.js của Mozilla.
-    Đồng thời hiển thị link mở tab mới.
-    """
     try:
-        _pdf_preview_embed(data, height=height)
-    except Exception:
+        # Cách 1: nhúng trực tiếp
         b64 = base64.b64encode(data).decode("utf-8")
-        data_url = f"data:application/pdf;base64,{b64}"
-        viewer = "https://mozilla.github.io/pdf.js/web/viewer.html?file=" + quote(data_url, safe="")
-        # Nhúng viewer pdf.js
-        st.components.v1.iframe(viewer, height=height, scrolling=True)
-        # Link mở tab mới
-        st.caption("Nếu trình duyệt/extension vẫn chặn, bấm vào liên kết dưới để mở trong tab mới.")
-        st.markdown(f"[🔗 Mở PDF trong tab mới]({viewer})")
+        src = f"data:application/pdf;base64,{b64}"
+        st.components.v1.html(
+            f'<iframe src="{src}" width="100%" height="{height}" type="application/pdf"></iframe>',
+            height=height + 8,
+            scrolling=True,
+        )
+    except Exception:
+        pass  # nếu lỗi sẽ thử cách 2
+
+    # Cách 2: pdf.js + link tải
+    b64 = base64.b64encode(data).decode("utf-8")
+    data_url = f"data:application/pdf;base64,{b64}"
+    viewer = "https://mozilla.github.io/pdf.js/web/viewer.html?file=" + quote(data_url, safe="")
+    st.components.v1.iframe(viewer, height=height, scrolling=True)
+    st.markdown(f"[📄 Mở PDF trong tab mới]({viewer})", unsafe_allow_html=True)
+    st.download_button("⬇ Tải PDF", data=data, file_name="preview.pdf", mime="application/pdf")
 # ============ Title ============
 st.set_page_config(page_title="Quản lý Văn bản", layout="wide")
 st.title("📚 Quản lý Văn bản - Dropbox")
