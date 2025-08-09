@@ -10,8 +10,8 @@ from googleapiclient.http import MediaFileUpload
 # ==========================
 # Load config
 # ==========================
-SHEET_ID = st.secrets["1jO2B5GawiRCSla0tqqC9rDdIu7lLtUuT-J-0cHerGH0"]
-FOLDER_ID = st.secrets["0B85NRfuypJmeZWRYcXY3czdXcVk"]
+SHEET_ID = st.secrets["SHEET_ID"]
+FOLDER_ID = st.secrets["FOLDER_ID"]
 SCOPES = ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets"]
 
 # ==========================
@@ -143,4 +143,3 @@ with tab2:
             all_df = all_df[all_df["FileID"] != file_id_to_delete]
             update_sheet_after_delete(all_df)
             st.success("✅ Đã xóa thành công")
-
