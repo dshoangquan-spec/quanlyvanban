@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import tempfile
 import os
+import unicodedata
 from upload_to_dropbox import upload_file_to_dropbox  # trả về đường dẫn Dropbox
 from upload_to_dropbox import download_bytes_from_dropbox
 
