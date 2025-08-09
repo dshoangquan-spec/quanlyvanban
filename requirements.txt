@@ -1,3 +1,5 @@
 streamlit
 pandas
 dropbox
+openpyxl>=3.1
+# (tuỳ chọn) xlsxwriter>=3.2
