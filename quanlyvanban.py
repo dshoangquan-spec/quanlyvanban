@@ -5,8 +5,6 @@ import unicodedata
 import tempfile
 import pandas as pd
 import streamlit as st
-import base64
-from urllib.parse import quote
 
 
 from upload_to_dropbox import (
@@ -208,16 +206,15 @@ if os.path.exists("vanban.csv"):
         show  = filtered.iloc[start:end].reset_index(drop=True)
 
         # ============ Render bảng + hành động ============
-        H = st.columns([0.35, 1.0, 1.8, 1.1, 1.1, 1.6, 0.7, 0.7, 0.7])
+       H = st.columns([0.35, 1.0, 1.8, 1.1, 1.1, 1.6, 0.7, 0.7])
         H[0].markdown("**#**")
         H[1].markdown("**Số văn bản**")
         H[2].markdown("**Tiêu đề**")
         H[3].markdown("**Cơ quan**")
         H[4].markdown("**Lĩnh vực**")
         H[5].markdown("**File**")
-        H[6].markdown("**👁 Xem**")
-        H[7].markdown("**⬇️ Tải**")
-        H[8].markdown("**🗑 Xóa**")
+        H[6].markdown("**⬇️ Tải**")
+        H[7].markdown("**🗑 Xóa**")
 
         if "preview_path" not in st.session_state:
             st.session_state.preview_path = ""
@@ -226,65 +223,46 @@ if os.path.exists("vanban.csv"):
             dropbox_path = _clean_path(row.get("File Dropbox", ""))
             file_name = os.path.basename(dropbox_path) if dropbox_path.startswith("/") else ""
 
-            c = st.columns([0.35, 1.0, 1.8, 1.1, 1.1, 1.6, 0.7, 0.7, 0.7])
-            c[0].write(f"**{start+idx+1}**")
-            c[1].write(row.get("Số văn bản", ""))
-            c[2].write(row.get("Tiêu đề", ""))
-            c[3].write(row.get("Cơ quan", ""))
-            c[4].write(row.get("Lĩnh vực", ""))
-            c[5].write(file_name or "-")
+           c = st.columns([0.35, 1.0, 1.8, 1.1, 1.1, 1.6, 0.7, 0.7])
+c[0].write(f"**{start+idx+1}**")
+c[1].write(row.get("Số văn bản", ""))
+c[2].write(row.get("Tiêu đề", ""))
+c[3].write(row.get("Cơ quan", ""))
+c[4].write(row.get("Lĩnh vực", ""))
+c[5].write(file_name or "-")
 
-            if dropbox_path and dropbox_path.startswith("/"):
-                # 👁 Xem (PDF)
-                with c[6].container():
-                    st.markdown('<div class="btn-cell">', unsafe_allow_html=True)
-                    if file_name.lower().endswith(".pdf"):
-                        if st.button("👁", key=f"prev_{dropbox_path}"):
-                            st.session_state.preview_path = dropbox_path
-                    else:
-                        st.button("—", key=f"prev_dis_{dropbox_path}", disabled=True)
-                    st.markdown("</div>", unsafe_allow_html=True)
+if dropbox_path and dropbox_path.startswith("/"):
+    # ⬇️ Tải
+    with c[6].container():
+        st.markdown('<div class="btn-cell">', unsafe_allow_html=True)
+        try:
+            file_bytes = download_bytes_from_dropbox(dropbox_path)
+            st.download_button(
+                "⬇️", data=file_bytes, file_name=file_name or "file",
+                mime="application/octet-stream", key=f"dl_{dropbox_path}"
+            )
+        except Exception:
+            st.button("⚠️", key=f"warn_{dropbox_path}", disabled=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-                # ⬇️ Tải
-                with c[7].container():
-                    st.markdown('<div class="btn-cell">', unsafe_allow_html=True)
-                    try:
-                        file_bytes = download_bytes_from_dropbox(dropbox_path)
-                        st.download_button("⬇️", data=file_bytes, file_name=file_name or "file",
-                                           mime="application/octet-stream", key=f"dl_{dropbox_path}")
-                    except Exception:
-                        st.button("⚠️", key=f"warn_{dropbox_path}", disabled=True)
-                    st.markdown("</div>", unsafe_allow_html=True)
-
-                # 🗑 Xóa
-                with c[8].container():
-                    st.markdown('<div class="btn-cell">', unsafe_allow_html=True)
-                    if st.button("🗑", key=f"del_{dropbox_path}"):
-                        try:
-                            delete_file_from_dropbox(dropbox_path)
-                        except Exception as e:
-                            st.error(f"Lỗi xóa Dropbox: {e}")
-
-                        full_df = pd.read_csv("vanban.csv", keep_default_na=False)
-                        full_df["File Dropbox"] = full_df["File Dropbox"].apply(_clean_path)
-                        full_df = full_df[full_df["File Dropbox"] != dropbox_path]
-                        full_df.to_csv("vanban.csv", index=False, encoding="utf-8-sig")
-                        st.success(f"Đã xóa: {file_name}")
-                        st.rerun()
-                    st.markdown("</div>", unsafe_allow_html=True)
-            else:
-                c[6].write("-"); c[7].write("-"); c[8].write("-")
-
-        # ============ Khu vực xem trước PDF ============
-        if st.session_state.preview_path:
-            st.markdown("---")
-            st.subheader("👁 Xem trước")
+    # 🗑 Xóa
+    with c[7].container():
+        st.markdown('<div class="btn-cell">', unsafe_allow_html=True)
+        if st.button("🗑", key=f"del_{dropbox_path}"):
             try:
-                pdf_bytes = download_bytes_from_dropbox(st.session_state.preview_path)
-                _pdf_preview_safe(pdf_bytes, height=700)
+                delete_file_from_dropbox(dropbox_path)
             except Exception as e:
-                st.error(f"Không xem trước được PDF: {e}")
-            if st.button("Đóng xem trước"):
-                st.session_state.preview_path = ""
+                st.error(f"Lỗi xóa Dropbox: {e}")
+
+            full_df = pd.read_csv("vanban.csv", keep_default_na=False)
+            full_df["File Dropbox"] = full_df["File Dropbox"].apply(_clean_path)
+            full_df = full_df[full_df["File Dropbox"] != dropbox_path]
+            full_df.to_csv("vanban.csv", index=False, encoding="utf-8-sig")
+            st.success(f"Đã xóa: {file_name}")
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+    c[6].write("-"); c[7].write("-")
+
 else:
     st.info("Chưa có văn bản nào được lưu.")
