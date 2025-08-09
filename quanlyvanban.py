@@ -5,6 +5,9 @@ import unicodedata
 import tempfile
 import pandas as pd
 import streamlit as st
+import base64
+from urllib.parse import quote
+
 
 from upload_to_dropbox import (
     upload_file_to_dropbox,
@@ -70,23 +73,32 @@ def _excel_bytes_from_df(df: pd.DataFrame) -> bytes:
         ) from e_xlsx
 
 
+def _pdf_preview_embed(data: bytes, height: int = 700):
+    """Cách 1: nhúng trực tiếp data: vào iframe (có thể bị chặn ở 1 số Chrome/extension)."""
+    b64 = base64.b64encode(data).decode("utf-8")
+    src = f"data:application/pdf;base64,{b64}"
+    st.components.v1.html(
+        f'<iframe src="{src}" width="100%" height="{height}" type="application/pdf"></iframe>',
+        height=height + 8,
+        scrolling=True,
+    )
+
 def _pdf_preview_safe(data: bytes, height: int = 700):
     """
-    Xem PDF an toàn: dùng pdf.js host bởi Mozilla.
-    Nếu vẫn bị chặn -> hiển thị link mở tab mới.
+    Xem PDF an toàn: thử nhúng trực tiếp; nếu bị chặn, dùng pdf.js của Mozilla.
+    Đồng thời hiển thị link mở tab mới.
     """
     try:
-        # Thử cách nhúng trực tiếp trước (nhanh, không phụ thuộc ngoài)
         _pdf_preview_embed(data, height=height)
     except Exception:
-        # Fallback: dùng pdf.js viewer
         b64 = base64.b64encode(data).decode("utf-8")
         data_url = f"data:application/pdf;base64,{b64}"
         viewer = "https://mozilla.github.io/pdf.js/web/viewer.html?file=" + quote(data_url, safe="")
+        # Nhúng viewer pdf.js
         st.components.v1.iframe(viewer, height=height, scrolling=True)
+        # Link mở tab mới
         st.caption("Nếu trình duyệt/extension vẫn chặn, bấm vào liên kết dưới để mở trong tab mới.")
         st.markdown(f"[🔗 Mở PDF trong tab mới]({viewer})")
-
 # ============ Title ============
 st.set_page_config(page_title="Quản lý Văn bản", layout="wide")
 st.title("📚 Quản lý Văn bản - Dropbox")
