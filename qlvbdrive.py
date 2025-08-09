@@ -10,8 +10,8 @@ from googleapiclient.http import MediaFileUpload
 # ==========================
 # Load config
 # ==========================
-SHEET_ID = st.secrets["SHEET_ID"]
-FOLDER_ID = st.secrets["FOLDER_ID"]
+SHEET_ID = st.secrets["1jO2B5GawiRCSla0tqqC9rDdIu7lLtUuT-J-0cHerGH0"]
+FOLDER_ID = st.secrets["0B85NRfuypJmeZWRYcXY3czdXcVk"]
 SCOPES = ["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets"]
 
 # ==========================
