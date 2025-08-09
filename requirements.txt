@@ -3,3 +3,8 @@ pandas
 dropbox
 openpyxl>=3.1
 # (tuỳ chọn) xlsxwriter>=3.2
+google-auth
+google-api-python-client
+google-auth-httplib2
+gspread
+
