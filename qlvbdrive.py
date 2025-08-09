@@ -2,6 +2,7 @@ import json
 import io
 import pandas as pd
 import streamlit as st
+st.write("Keys trong secrets:", list(st.secrets.keys()))
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
